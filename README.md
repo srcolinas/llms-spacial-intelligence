@@ -9,18 +9,6 @@ The task could be given to the LLM as a description of the coordinate system or 
 
 Both questions are basically the same, but they convey context in different ways. Hopefully this can help to diagnose whether the conclusions are a consequence of the representation of the problem or whether they come from inherent spacial intelligence of the LLMs.
 
-## Project layout
-
-```
-apps/
-  viewer/    # Rust path visualizer
-  dataset/   # Rust dataset generator
-  solver/    # Python LLM solver package
-libs/
-  rust/      # spatial core + PyO3 bindings
-  python/    # spatial Python package (wraps Rust)
-```
-
 ## Running the project
 
 If you have already setup the project (by running `task setup`), run:
