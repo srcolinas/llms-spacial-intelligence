@@ -14,7 +14,7 @@ Both questions are basically the same, but they convey context in different ways
 If you have already setup the project (by running `task setup`), run:
 
 1. `task build` to compile the Rust workspace and install the Python extension.
-2. `task create-dataset` to generate a dataset of question and answer pairs. It should generate a `data/questions.jsonl` file.
+2. `task create-dataset` to generate a dataset of question and answer pairs. It should generate `data/questions.jsonl` `data/graph.json` and `data/coordinates.md` files; the first is the questions, while the last two are descriptions of the space. 
 3. `task view` to open the path visualizer in a browser.
 4. `task solve -- --llm ollama:llama3.1:8b --agent bare --problem graph` to solve one problem with the llm and agent of choice. For the LLM, any string supported by Pydantic AI will work. Ensure credentials for the LLM are provided in the `.env` file.
 5. `task evaluate -- --answers data/answers.graph.bare.ollama-llama3.1-8b.jsonl --answers data/answers.graph.bare.gateway-openai-gpt-6-luna.jsonl` to score one or more answer files and write `data/evaluation.jsonl`.
