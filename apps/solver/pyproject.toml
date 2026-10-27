@@ -1,0 +1,23 @@
+[project]
+name = "solver"
+version = "0.1.0"
+description = "Solve spatial shortest-path questions with LLM agents"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+    "pydantic-ai>=2.50",
+    "pydantic-settings>=2.15",
+    "python-dotenv>=1.2",
+    "spatial",
+    "tqdm>=4.66",
+]
+
+[project.scripts]
+solve = "solver.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

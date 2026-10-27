@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Path viewer</title>
+<style>
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #0f172a;
+    background: #fff;
+  }
+  .page-tabs, .mode-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid #cbd5e1;
+    padding: 0 16px;
+    background: #fff;
+  }
+  .page-tabs button, .mode-tabs button {
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    padding: 10px 14px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .page-tabs button.selected, .mode-tabs button.selected { border-bottom-color: #111; }
+  .layout { display: flex; min-height: calc(100vh - 90px); }
+  .layout.no-mode-tabs { min-height: calc(100vh - 45px); }
+  .layout.overview-only { min-height: calc(100vh - 45px); }
+  aside {
+    width: 300px;
+    flex: none;
+    border-right: 1px solid #e2e8f0;
+    padding: 16px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+  }
+  .layout.no-mode-tabs aside {
+    max-height: calc(100vh - 45px);
+  }
+  aside h1 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #047857;
+  }
+  #rows { display: flex; flex-direction: column; gap: 4px; }
+  main { flex: 1; min-width: 0; padding: 16px 24px 32px; }
+  .overview-main { padding: 24px 32px 48px; max-width: 960px; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  #question-caption { margin: 0; font-weight: 600; font-size: 15px; }
+  #layer-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .layer-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .layer-control label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    min-width: 220px;
+  }
+  .layer-control input { margin: 0; cursor: pointer; }
+  .layer-control .step-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .layer-control .step-nav button {
+    padding: 4px 10px;
+    text-align: center;
+    min-width: 36px;
+  }
+  .layer-control .step-info {
+    font-size: 12px;
+    color: #64748b;
+    flex: 1;
+    min-width: 160px;
+  }
+  button {
+    font: inherit;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    text-align: left;
+  }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #rows button.selected { background: #eff6ff; border-color: #2563eb; font-weight: 700; }
+  .space-wrap { overflow: auto; }
+  svg { display: block; max-width: 100%; height: auto; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #334155;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    display: inline-block;
+    border: 1px solid rgba(15, 23, 42, 0.2);
+  }
+  .meta {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.4;
+  }
+  .hex-label { font-size: 10px; font-weight: 600; fill: #1e3a8a; pointer-events: none; }
+  .vertex-label tspan.dir { font-size: 9px; fill: #475569; }
+  .vertex-label.graph { font-size: 10px; font-weight: 600; }
+  .hidden { display: none !important; }
+  .chart-block { margin-bottom: 28px; }
+  .chart-block h2 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 140px 1fr 48px;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+  .bar-track {
+    height: 18px;
+    background: #f1f5f9;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    min-width: 2px;
+  }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .metric-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: #f8fafc;
+  }
+  .metric-card h3 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    word-break: break-word;
+  }
+  .metric-card dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    font-size: 13px;
+  }
+  .metric-card dt { color: #64748b; }
+  .metric-card dd { margin: 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<nav class="page-tabs">
+  <button id="page-browse" type="button" class="selected">Browse</button>
+  <button id="page-overview" type="button">Overview</button>
+</nav>
+<nav class="mode-tabs" id="mode-tabs">
+  <button id="tab-coordinates" type="button" class="selected">Coordinates</button>
+  <button id="tab-graph" type="button">Graph</button>
+</nav>
+<div class="layout" id="browse-layout">
+  <aside>
+    <p class="meta" id="space-meta"></p>
+    <div>
+      <h1>Rows</h1>
+      <div id="rows"></div>
+    </div>
+  </aside>
+  <main>
+    <div class="toolbar">
+      <p id="question-caption"></p>
+    </div>
+    <div id="layer-controls" class="hidden"></div>
+    <div class="space-wrap">
+      <svg id="space" role="img" aria-label="Hex space"></svg>
+    </div>
+    <div class="legend" id="legend"></div>
+  </main>
+</div>
+<div class="overview-main hidden" id="overview-panel">
+  <h1 style="margin:0 0 8px;font-size:22px;">Agent comparison</h1>
+  <p class="meta" id="overview-meta"></p>
+  <div id="histograms"></div>
+  <div class="metric-grid" id="metric-cards"></div>
+</div>
+<script>
+const DATA = __DATA__;
+DATA.questions.sort((a, b) => a.id - b.id);
+
+const AGENT_COLORS = ["#2563eb", "#7c3aed", "#ea580c", "#db2777", "#0891b2", "#65a30d"];
+const OPTIMAL_COLOR = "#047857";
+const GROUND_TRUTH_KEY = "optimal";
+const LANE_SPACING = 7;
+
+function answerProblem() {
+  const agents = DATA.answers?.agents ?? [];
+  if (agents.length === 0) return null;
+  const problems = [...new Set(agents.map((entry) => entry.problem))];
+  return problems[0] ?? null;
+}
+
+const lockedProblem = answerProblem();
+const modeLocked = lockedProblem != null;
+
+let page = "browse";
+let mode = lockedProblem
+  ?? (DATA.questions.some((q) => q.coordinates) ? "coordinates" : "graph");
+let row = 0;
+const visibleLayers = new Set([GROUND_TRUTH_KEY]);
+const layerSteps = new Map();
+
+const answersById = new Map(
+  (DATA.answers?.rows ?? []).map((entry) => [entry.id, entry]),
+);
+const agentProblem = new Map(
+  (DATA.answers?.agents ?? []).map((entry) => [entry.key, entry.problem]),
+);
+
+const labelIndex = new Map(
+  DATA.space.vertices.map((vertex, index) => [vertex.label, index]),
+);
+const coordinateIndex = new Map(
+  DATA.space.vertices.map((vertex, index) => [
+    `${vertex.q},${vertex.r},${vertex.d}`,
+    index,
+  ]),
+);
+
+function escapeXml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function hasMode(name) {
+  return DATA.questions.some((question) => question[name]);
+}
+
+function hasEvaluation() {
+  return Boolean(DATA.evaluation && DATA.evaluation.agents.length > 0);
+}
+
+function agentKeys() {
+  if (DATA.evaluation?.agents.length) {
+    return DATA.evaluation.agents;
+  }
+  return (DATA.answers?.agents ?? []).map((entry) => entry.key);
+}
+
+function hasAgentAnswers() {
+  return agentKeys().length > 0;
+}
+
+function currentQuestion() {
+  return DATA.questions[row];
+}
+
+function pathVertexIndicesFromKeys(keys, problem) {
+  const useCoordinates = problem === "coordinates";
+  if (useCoordinates) {
+    return keys.map((key) => {
+      const match = key.match(/^\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)$/);
+      if (!match) return null;
+      return coordinateIndex.get(`${match[1]},${match[2]},${match[3]}`);
+    });
+  }
+  return keys.map((label) => labelIndex.get(label));
+}
+
+function pathKeysFromValue(pathValue, problem) {
+  if (!pathValue) return [];
+  if (problem === "coordinates") {
+    return pathValue.map((coordinate) =>
+      `(${coordinate.q}, ${coordinate.r}, ${coordinate.d})`,
+    );
+  }
+  return pathValue.slice();
+}
+
+function pathVertexIndices(question) {
+  if (question.coordinates && mode === "coordinates") {
+    return question.coordinates.path.map(
+      (coordinate) => coordinateIndex.get(`${coordinate.q},${coordinate.r},${coordinate.d}`),
+    );
+  }
+  if (question.graph && mode === "graph") {
+    return question.graph.path.map((label) => labelIndex.get(label));
+  }
+  return [];
+}
+
+function pathKeysForMode(question) {
+  if (mode === "coordinates" && question.coordinates) {
+    return question.coordinates.path.map(
+      (coordinate) => `(${coordinate.q}, ${coordinate.r}, ${coordinate.d})`,
+    );
+  }
+  if (mode === "graph" && question.graph) {
+    return question.graph.path.slice();
+  }
+  return [];
+}
+
+function agentPathKeys(agentKey, question) {
+  const answerRow = answersById.get(question.id);
+  if (!answerRow) return [];
+  const answer = answerRow.agents[agentKey];
+  if (!answer || !answer.prediction) return [];
+  const problem = agentProblem.get(agentKey) ?? mode;
+  return pathKeysFromValue(answer.prediction, problem);
+}
+
+function groundTruthPathIndices(question) {
+  const keys = pathKeysForMode(question);
+  if (keys.length > 0) {
+    return pathVertexIndicesFromKeys(keys, mode);
+  }
+  return pathVertexIndices(question);
+}
+
+function layerStep(layerKey) {
+  return layerSteps.get(layerKey) ?? 0;
+}
+
+function setLayerStep(layerKey, step) {
+  layerSteps.set(layerKey, Math.max(0, step));
+}
+
+function resetLayerSteps() {
+  layerSteps.clear();
+}
+
+function pathIndicesForLayer(layerKey, question) {
+  if (layerKey === GROUND_TRUTH_KEY) {
+    return groundTruthPathIndices(question);
+  }
+  const agentKey = layerKey.slice("agent:".length);
+  const keys = agentPathKeys(agentKey, question);
+  const problem = agentProblem.get(agentKey) ?? "graph";
+  return pathVertexIndicesFromKeys(keys, problem);
+}
+
+function pathKeysForLayer(layerKey, question) {
+  if (layerKey === GROUND_TRUTH_KEY) {
+    return pathKeysForMode(question);
+  }
+  return agentPathKeys(layerKey.slice("agent:".length), question);
+}
+
+function laneOffset(laneIndex, laneCount) {
+  return (laneIndex - (laneCount - 1) / 2) * LANE_SPACING;
+}
+
+function segmentOffset(x1, y1, x2, y2, amount) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  return { dx: (-dy / len) * amount, dy: (dx / len) * amount };
+}
+
+function offsetVertexOnPath(pathIndices, pathIndex, laneIndex, laneCount) {
+  const vertexIndex = pathIndices[pathIndex];
+  if (vertexIndex == null) return null;
+  const vertex = DATA.space.vertices[vertexIndex];
+  const amount = laneOffset(laneIndex, laneCount);
+  let ox = 0;
+  let oy = 0;
+  let count = 0;
+  if (pathIndex > 0) {
+    const prev = DATA.space.vertices[pathIndices[pathIndex - 1]];
+    const shift = segmentOffset(prev.x, prev.y, vertex.x, vertex.y, amount);
+    ox += shift.dx;
+    oy += shift.dy;
+    count += 1;
+  }
+  if (pathIndex < pathIndices.length - 1) {
+    const next = DATA.space.vertices[pathIndices[pathIndex + 1]];
+    const shift = segmentOffset(vertex.x, vertex.y, next.x, next.y, amount);
+    ox += shift.dx;
+    oy += shift.dy;
+    count += 1;
+  }
+  return { x: vertex.x + ox / count, y: vertex.y + oy / count };
+}
+
+function offsetEdgeMarkup(a, b, color, width, laneIndex, laneCount) {
+  const start = DATA.space.vertices[a];
+  const end = DATA.space.vertices[b];
+  const amount = laneOffset(laneIndex, laneCount);
+  const shift = segmentOffset(start.x, start.y, end.x, end.y, amount);
+  return `<line x1="${start.x + shift.dx}" y1="${start.y + shift.dy}" x2="${end.x + shift.dx}" y2="${end.y + shift.dy}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>`;
+}
+
+function offsetPolylineMarkup(pathIndices, color, opacity, width, laneIndex, laneCount) {
+  const points = [];
+  for (let pathIndex = 0; pathIndex < pathIndices.length; pathIndex += 1) {
+    const point = offsetVertexOnPath(pathIndices, pathIndex, laneIndex, laneCount);
+    if (!point) continue;
+    points.push(`${point.x},${point.y}`);
+  }
+  if (points.length < 2) return "";
+  return `<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="${width}" stroke-opacity="${opacity}" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+function layerMarkerMarkup(x, y, color, { ring = false, visited = false } = {}) {
+  const parts = [];
+  if (visited) {
+    parts.push(
+      `<circle cx="${x}" cy="${y}" r="4" fill="${color}" stroke="#fff" stroke-width="1.2"/>`,
+    );
+  }
+  if (ring) {
+    parts.push(
+      `<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="${color}" stroke-width="2.5"/>`,
+      `<circle cx="${x}" cy="${y}" r="4" fill="${color}" stroke="#fff" stroke-width="1.2"/>`,
+    );
+  }
+  return parts.join("");
+}
+
+function layerDefinitions() {
+  const layers = [{ key: GROUND_TRUTH_KEY, color: OPTIMAL_COLOR, width: 3.5 }];
+  agentKeys().forEach((agentKey, index) => {
+    layers.push({
+      key: `agent:${agentKey}`,
+      color: agentColor(index),
+      width: 3,
+    });
+  });
+  return layers;
+}
+
+function layerStepCaption(layerKey, question) {
+  const pathIndices = pathIndicesForLayer(layerKey, question);
+  const step = layerStep(layerKey);
+  const totalSteps = Math.max(pathIndices.length - 1, 0);
+  if (pathIndices.length === 0) {
+    return "no path";
+  }
+  const keys = pathKeysForLayer(layerKey, question);
+  if (step === 0) {
+    const start = keys[0] ?? "?";
+    return `Step 0/${totalSteps} — at origin ${start}`;
+  }
+  const current = keys[step] ?? "?";
+  return `Step ${step}/${totalSteps} — at ${current}`;
+}
+
+function agentColor(index) {
+  return AGENT_COLORS[index % AGENT_COLORS.length];
+}
+
+function shortAgentLabel(agentKey) {
+  const parts = agentKey.split("/");
+  if (parts.length >= 3) {
+    return `${parts[1]}/${parts.slice(2).join("/")}`;
+  }
+  return agentKey;
+}
+
+function edgeKey(a, b) {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function traveledEdgeKeys(pathIndices, uptoStep) {
+  const keys = new Set();
+  for (let index = 0; index < uptoStep && index < pathIndices.length - 1; index += 1) {
+    const start = pathIndices[index];
+    const end = pathIndices[index + 1];
+    if (start == null || end == null) continue;
+    keys.add(edgeKey(start, end));
+  }
+  return keys;
+}
+
+function bounds() {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const vertex of DATA.space.vertices) {
+    minX = Math.min(minX, vertex.x);
+    minY = Math.min(minY, vertex.y);
+    maxX = Math.max(maxX, vertex.x);
+    maxY = Math.max(maxY, vertex.y);
+  }
+  const pad = 56;
+  return {
+    minX: minX - pad,
+    minY: minY - pad,
+    maxX: maxX + pad,
+    maxY: maxY + pad,
+  };
+}
+
+function hexLabelMarkup(hex) {
+  const label = `(${hex.q}, ${hex.r})`;
+  return [
+    `<g class="hex-label">`,
+    `<title>${escapeXml(label)}</title>`,
+    `<text x="${hex.x}" y="${hex.y + 4}" text-anchor="middle">${escapeXml(label)}</text>`,
+    `</g>`,
+  ].join("");
+}
+
+function vertexLabelMarkup(vertex) {
+  if (mode === "graph") {
+    return `<text class="vertex-label graph" x="${vertex.x}" y="${vertex.y - 10}" text-anchor="middle" fill="#0f172a">${escapeXml(vertex.label)}</text>`;
+  }
+  const full = `(${vertex.q}, ${vertex.r}, ${vertex.d})`;
+  return [
+    `<g class="vertex-label">`,
+    `<title>${escapeXml(full)}</title>`,
+    `<text x="${vertex.x}" y="${vertex.y - 6}" text-anchor="middle">`,
+    `<tspan class="dir" x="${vertex.x}" dy="0">d=${vertex.d}</tspan>`,
+    `</text>`,
+    `</g>`,
+  ].join("");
+}
+
+function renderSpace() {
+  const question = currentQuestion();
+  const activeLayers = layerDefinitions().filter((layer) => visibleLayers.has(layer.key));
+  const laneCount = activeLayers.length;
+  const groundTruthIndices = groundTruthPathIndices(question);
+  const originIndex = groundTruthIndices[0] ?? null;
+  const destinationIndex = groundTruthIndices[groundTruthIndices.length - 1] ?? null;
+
+  const box = bounds();
+  const width = box.maxX - box.minX;
+  const height = box.maxY - box.minY;
+  const svg = document.getElementById("space");
+  svg.setAttribute("viewBox", `${box.minX} ${box.minY} ${width} ${height}`);
+
+  const parts = [];
+  for (const hex of DATA.space.hexes) {
+    parts.push(
+      `<polygon points="${hex.points}" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>`,
+    );
+    if (mode === "coordinates") {
+      parts.push(hexLabelMarkup(hex));
+    }
+  }
+  for (const [a, b] of DATA.space.edges) {
+    const start = DATA.space.vertices[a];
+    const end = DATA.space.vertices[b];
+    parts.push(
+      `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="#cbd5e1" stroke-width="1.4" stroke-linecap="round"/>`,
+    );
+  }
+
+  activeLayers.forEach((layer, laneIndex) => {
+    const pathIndices = pathIndicesForLayer(layer.key, question);
+    const step = layerStep(layer.key);
+    parts.push(
+      offsetPolylineMarkup(pathIndices, layer.color, 0.3, layer.width, laneIndex, laneCount),
+    );
+    const traveled = traveledEdgeKeys(pathIndices, step);
+    for (const key of traveled) {
+      const [a, b] = key.split(":").map(Number);
+      parts.push(offsetEdgeMarkup(a, b, layer.color, layer.width, laneIndex, laneCount));
+    }
+  });
+
+  DATA.space.vertices.forEach((vertex, index) => {
+    let fill = "#94a3b8";
+    let radius = 5;
+    let stroke = "#fff";
+    let strokeWidth = 1.2;
+    if (index === originIndex) {
+      fill = "#047857";
+      radius = 7;
+    } else if (index === destinationIndex) {
+      fill = "#b45309";
+      radius = 7;
+    }
+    const fullCoordinate = `(${vertex.q}, ${vertex.r}, ${vertex.d})`;
+    const tooltip = mode === "graph"
+      ? `${vertex.label} · ${fullCoordinate}`
+      : fullCoordinate;
+    parts.push(
+      `<g>`,
+      `<title>${escapeXml(tooltip)}</title>`,
+      `<circle cx="${vertex.x}" cy="${vertex.y}" r="${radius}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+      `</g>`,
+    );
+    parts.push(vertexLabelMarkup(vertex));
+  });
+
+  activeLayers.forEach((layer, laneIndex) => {
+    const pathIndices = pathIndicesForLayer(layer.key, question);
+    const step = layerStep(layer.key);
+    for (let pathIndex = 0; pathIndex <= step && pathIndex < pathIndices.length; pathIndex += 1) {
+      const point = offsetVertexOnPath(pathIndices, pathIndex, laneIndex, laneCount);
+      if (!point) continue;
+      const isCurrent = pathIndex === step;
+      parts.push(layerMarkerMarkup(point.x, point.y, layer.color, {
+        visited: !isCurrent,
+        ring: isCurrent,
+      }));
+    }
+  });
+
+  svg.innerHTML = parts.join("");
+}
+
+function renderRows() {
+  const rows = document.getElementById("rows");
+  rows.replaceChildren();
+  DATA.questions.forEach((question, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    if (index === row) button.className = "selected";
+    button.textContent = String(question.id);
+    button.addEventListener("click", () => {
+      row = index;
+      resetLayerSteps();
+      render();
+    });
+    rows.appendChild(button);
+  });
+}
+
+function renderTabs() {
+  const modeTabs = document.getElementById("mode-tabs");
+  const browseLayout = document.getElementById("browse-layout");
+  if (modeLocked) {
+    modeTabs.classList.add("hidden");
+    browseLayout.classList.add("no-mode-tabs");
+    return;
+  }
+  modeTabs.classList.remove("hidden");
+  browseLayout.classList.remove("no-mode-tabs");
+  const coordinatesTab = document.getElementById("tab-coordinates");
+  const graphTab = document.getElementById("tab-graph");
+  coordinatesTab.classList.toggle("selected", mode === "coordinates");
+  graphTab.classList.toggle("selected", mode === "graph");
+  coordinatesTab.disabled = !hasMode("coordinates");
+  graphTab.disabled = !hasMode("graph");
+}
+
+function renderPageTabs() {
+  document.getElementById("page-browse").classList.toggle("selected", page === "browse");
+  document.getElementById("page-overview").classList.toggle("selected", page === "overview");
+  document.getElementById("browse-layout").classList.toggle("hidden", page !== "browse");
+  document.getElementById("mode-tabs").classList.toggle("hidden", page !== "browse");
+  document.getElementById("overview-panel").classList.toggle("hidden", page !== "overview");
+}
+
+function renderMeta() {
+  const meta = DATA.metadata.space;
+  const representation = mode === "graph" ? "Graph labels" : "Coordinates";
+  document.getElementById("space-meta").textContent =
+    `Space size ${meta.size} · ${meta.hex_count} hexes · ${meta.vertex_count} vertices · ${representation}`;
+}
+
+function layerLabel(layerKey, color) {
+  const name = layerKey === GROUND_TRUTH_KEY
+    ? "Ground truth"
+    : shortAgentLabel(layerKey.slice("agent:".length));
+  return `${name} (${color})`;
+}
+
+function renderLayerControls() {
+  const container = document.getElementById("layer-controls");
+  const layers = layerDefinitions();
+  if (layers.length === 0) {
+    container.classList.add("hidden");
+    return;
+  }
+  container.classList.remove("hidden");
+  container.replaceChildren();
+
+  const question = currentQuestion();
+
+  for (const layer of layers) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "layer-control";
+
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = visibleLayers.has(layer.key);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        visibleLayers.add(layer.key);
+      } else {
+        visibleLayers.delete(layer.key);
+      }
+      renderSpace();
+      renderLegend();
+    });
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.style.background = layer.color;
+    const text = document.createElement("span");
+    text.textContent = layerLabel(layer.key, layer.color);
+    label.append(checkbox, swatch, text);
+
+    const nav = document.createElement("div");
+    nav.className = "step-nav";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "←";
+    back.title = "Back";
+    const forward = document.createElement("button");
+    forward.type = "button";
+    forward.textContent = "→";
+    forward.title = "Forward";
+
+    const pathIndices = pathIndicesForLayer(layer.key, question);
+    const maxStep = Math.max(pathIndices.length - 1, 0);
+    const step = layerStep(layer.key);
+    back.disabled = step === 0;
+    forward.disabled = step >= maxStep;
+
+    back.addEventListener("click", () => {
+      if (layerStep(layer.key) === 0) return;
+      setLayerStep(layer.key, layerStep(layer.key) - 1);
+      renderLayerControls();
+      renderSpace();
+    });
+    forward.addEventListener("click", () => {
+      const indices = pathIndicesForLayer(layer.key, currentQuestion());
+      if (layerStep(layer.key) >= indices.length - 1) return;
+      setLayerStep(layer.key, layerStep(layer.key) + 1);
+      renderLayerControls();
+      renderSpace();
+    });
+    nav.append(back, forward);
+
+    const stepInfo = document.createElement("span");
+    stepInfo.className = "step-info";
+    stepInfo.textContent = layerStepCaption(layer.key, question);
+
+    rowEl.append(label, nav, stepInfo);
+    container.append(rowEl);
+  }
+}
+
+function renderLegend() {
+  const legend = document.getElementById("legend");
+  const items = [
+    `<span><i class="swatch" style="background:#dbeafe"></i> Hex</span>`,
+    `<span><i class="swatch" style="background:#cbd5e1"></i> Edge</span>`,
+    `<span><i class="swatch" style="background:#94a3b8"></i> Vertex</span>`,
+    `<span><i class="swatch" style="background:${OPTIMAL_COLOR}"></i> Optimal path</span>`,
+    `<span><i class="swatch" style="background:#fff;border:2px solid #64748b"></i> Current step (ring)</span>`,
+    `<span><i class="swatch" style="background:#64748b"></i> Visited step (dot)</span>`,
+    `<span><i class="swatch" style="background:#047857"></i> Origin</span>`,
+    `<span><i class="swatch" style="background:#b45309"></i> Destination</span>`,
+  ];
+  agentKeys().forEach((agentKey, index) => {
+    items.push(
+      `<span><i class="swatch" style="background:${agentColor(index)}"></i> ${escapeXml(shortAgentLabel(agentKey))}</span>`,
+    );
+  });
+  legend.innerHTML = items.join("");
+}
+
+function renderQuestionCaption() {
+  document.getElementById("question-caption").textContent =
+    `Question ${currentQuestion().id}`;
+}
+
+function agentStats() {
+  if (!DATA.evaluation) return [];
+  const total = DATA.evaluation.rows.length;
+  return DATA.evaluation.agents.map((agentKey) => {
+    let answered = 0;
+    let valid = 0;
+    let optimalLength = 0;
+    let correct = 0;
+    for (const rowData of DATA.evaluation.rows) {
+      const result = rowData.agents[agentKey];
+      if (!result || result.error === "not answered") continue;
+      answered += 1;
+      if (result.valid) valid += 1;
+      if (result.length === rowData.expected_length) optimalLength += 1;
+      if (result.correct) correct += 1;
+    }
+    return { agentKey, total, answered, valid, optimalLength, correct };
+  });
+}
+
+function renderBarChart(title, stats, field) {
+  const block = document.createElement("div");
+  block.className = "chart-block";
+  const heading = document.createElement("h2");
+  heading.textContent = title;
+  block.append(heading);
+  stats.forEach((entry, index) => {
+    const count = entry[field];
+    const denominator = entry.answered || 1;
+    const pct = Math.round((count / denominator) * 100);
+    const rowEl = document.createElement("div");
+    rowEl.className = "chart-row";
+    rowEl.innerHTML = `
+      <span>${escapeXml(shortAgentLabel(entry.agentKey))}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${agentColor(index)}"></div></div>
+      <span>${count}/${entry.answered}</span>
+    `;
+    block.append(rowEl);
+  });
+  return block;
+}
+
+function renderOverview() {
+  if (!hasEvaluation()) return;
+  const stats = agentStats();
+  document.getElementById("overview-meta").textContent =
+    `${stats.length} agents · ${stats[0]?.total ?? 0} questions`;
+  const histograms = document.getElementById("histograms");
+  histograms.replaceChildren();
+  histograms.append(
+    renderBarChart("Valid paths", stats, "valid"),
+    renderBarChart("Optimal length", stats, "optimalLength"),
+    renderBarChart("Correct (valid + shortest)", stats, "correct"),
+  );
+  const cards = document.getElementById("metric-cards");
+  cards.replaceChildren();
+  for (const entry of stats) {
+    const card = document.createElement("div");
+    card.className = "metric-card";
+    card.innerHTML = `
+      <h3>${escapeXml(entry.agentKey)}</h3>
+      <dl>
+        <dt>Answered</dt><dd>${entry.answered}/${entry.total}</dd>
+        <dt>Valid</dt><dd>${entry.valid}/${entry.answered}</dd>
+        <dt>Optimal length</dt><dd>${entry.optimalLength}/${entry.answered}</dd>
+        <dt>Correct</dt><dd>${entry.correct}/${entry.total}</dd>
+      </dl>
+    `;
+    cards.append(card);
+  }
+}
+
+function render() {
+  renderPageTabs();
+  if (page === "overview") {
+    renderOverview();
+    return;
+  }
+  renderTabs();
+  renderRows();
+  renderMeta();
+  renderQuestionCaption();
+  renderLayerControls();
+  renderLegend();
+  renderSpace();
+}
+
+document.getElementById("page-browse").addEventListener("click", () => {
+  page = "browse";
+  render();
+});
+
+document.getElementById("page-overview").addEventListener("click", () => {
+  if (!hasEvaluation()) return;
+  page = "overview";
+  render();
+});
+
+document.getElementById("tab-coordinates").addEventListener("click", () => {
+  if (modeLocked || !hasMode("coordinates") || mode === "coordinates") return;
+  mode = "coordinates";
+  resetLayerSteps();
+  render();
+});
+
+document.getElementById("tab-graph").addEventListener("click", () => {
+  if (modeLocked || !hasMode("graph") || mode === "graph") return;
+  mode = "graph";
+  resetLayerSteps();
+  render();
+});
+
+if (!modeLocked && !hasMode("coordinates") && hasMode("graph")) {
+  mode = "graph";
+}
+
+if (!hasEvaluation()) {
+  document.getElementById("page-overview").disabled = true;
+}
+if (hasAgentAnswers()) {
+  for (const agentKey of agentKeys()) {
+    visibleLayers.add(`agent:${agentKey}`);
+  }
+}
+
+render();
+</script>
+</body>
+</html>

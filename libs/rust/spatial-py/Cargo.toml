@@ -1,0 +1,12 @@
+[package]
+name = "spatial-py"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "spatial_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+spatial = { path = "../spatial" }

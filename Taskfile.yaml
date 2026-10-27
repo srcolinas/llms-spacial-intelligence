@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+env:
+  LANGFUSE_INIT_ORG_ID: llms-catan-placement
+  LANGFUSE_INIT_ORG_NAME: llms-catan-placement
+  LANGFUSE_INIT_PROJECT_ID: catan-placement
+  LANGFUSE_INIT_PROJECT_NAME: catan-placement
+  LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local-dev
+  LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-local-dev
+  LANGFUSE_INIT_USER_EMAIL: dev@localhost.com
+  LANGFUSE_INIT_USER_NAME: dev
+  LANGFUSE_INIT_USER_PASSWORD: localdevpassword
+  LANGFUSE_PUBLIC_KEY: pk-lf-local-dev
+  LANGFUSE_SECRET_KEY: sk-lf-local-dev
+  LANGFUSE_BASE_URL: http://localhost:3000
+  SOLVER_LANGFUSE_PUBLIC_KEY: pk-lf-local-dev
+  SOLVER_LANGFUSE_SECRET_KEY: sk-lf-local-dev
+  SOLVER_LANGFUSE_BASE_URL: http://localhost:3000
+
+tasks:
+  clean:
+    desc: Remove cache files and dependencies from workspace
+    cmds:
+      - rm -rf .venv .mypy_cache .ruff_cache .pytest_cache target
+      - find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+      - find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+      - rm -rf langfuse
+
+  setup:
+    desc: Setup project dependencies
+    cmds:
+      - cargo fetch
+      - uv sync
+
+  setup-langfuse:
+    desc: Setup Langfuse
+    cmds:
+      - git clone https://github.com/langfuse/langfuse.git
+
+  start-langfuse:
+    dir: langfuse
+    cmds:
+      - docker compose up
+
+  stop-langfuse:
+    dir: langfuse
+    cmds:
+      - docker compose down -v
+
+  build:
+    desc: Build Rust workspace and Python extension
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+    cmds:
+      - uv python install 3.13
+      - cargo build --workspace --exclude spatial-py
+      - uv sync --all-packages --reinstall-package spatial
+
+  format:
+    desc: Format Rust and Python code
+    cmds:
+      - cargo fmt
+      - uv run ruff format apps/solver libs/python/spatial
+      - uv run ruff check --fix apps/solver libs/python/spatial
+
+  lint:
+    desc: Run linters and type checks
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --workspace --exclude spatial-py --all-targets --all-features -- -D warnings
+      - uv run ruff format --check apps/solver libs/python/spatial
+      - uv run ruff check apps/solver libs/python/spatial
+      - uv run mypy .
+
+  test:
+    cmds:
+      - cargo test --workspace --exclude spatial-py --all-features
+
+  create-dataset:
+    desc: Generate a dataset of question and answer pairs
+    cmds:
+      - cargo run -p dataset -- --output data/questions.jsonl --coordinate --graph {{.CLI_ARGS}}
+
+  view:
+    desc: Open the path visualizer in a browser
+    cmds:
+      - cargo run -p viewer -- {{.CLI_ARGS}}
+
+  solve:
+    desc: Solve dataset questions with an LLM agent
+    dotenv:
+      - .env
+    cmds:
+      - uv run solve {{.CLI_ARGS}}
+
+  evaluate:
+    desc: Score solver answers against the dataset
+    cmds:
+      - cargo run -p evaluation -- {{.CLI_ARGS}}

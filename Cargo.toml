@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "libs/rust/spatial",
+    "libs/rust/spatial-py",
+    "apps/dataset",
+    "apps/evaluation",
+    "apps/viewer",
+]
