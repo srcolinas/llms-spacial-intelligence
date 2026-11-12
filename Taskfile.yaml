@@ -3,10 +3,10 @@
 version: '3'
 
 env:
-  LANGFUSE_INIT_ORG_ID: llms-catan-placement
-  LANGFUSE_INIT_ORG_NAME: llms-catan-placement
-  LANGFUSE_INIT_PROJECT_ID: catan-placement
-  LANGFUSE_INIT_PROJECT_NAME: catan-placement
+  LANGFUSE_INIT_ORG_ID: llms-spacial-intelligence
+  LANGFUSE_INIT_ORG_NAME: llms-spacial-intelligence
+  LANGFUSE_INIT_PROJECT_ID: llms-spacial-intelligence
+  LANGFUSE_INIT_PROJECT_NAME: llms-spacial-intelligence
   LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local-dev
   LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-local-dev
   LANGFUSE_INIT_USER_EMAIL: dev@localhost.com
@@ -15,9 +15,6 @@ env:
   LANGFUSE_PUBLIC_KEY: pk-lf-local-dev
   LANGFUSE_SECRET_KEY: sk-lf-local-dev
   LANGFUSE_BASE_URL: http://localhost:3000
-  SOLVER_LANGFUSE_PUBLIC_KEY: pk-lf-local-dev
-  SOLVER_LANGFUSE_SECRET_KEY: sk-lf-local-dev
-  SOLVER_LANGFUSE_BASE_URL: http://localhost:3000
 
 tasks:
   clean:

@@ -111,7 +111,8 @@ def _coordinates_prompt(question: CoordinateQuestion) -> str:
     return (
         "What is a shortest path from vertex "
         f"({origin.q}, {origin.r}, {origin.d}) to vertex "
-        f"({destination.q}, {destination.r}, {destination.d})?"
+        f"({destination.q}, {destination.r}, {destination.d})? "
+        "List every intermediate vertex. Use canonical (q, r, d) names only."
     )
 
 

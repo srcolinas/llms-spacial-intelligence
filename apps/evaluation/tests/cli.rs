@@ -49,10 +49,12 @@ fn scores_a_stored_graph_path() -> Result<(), Box<dyn std::error::Error>> {
         .arg(report.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("1/1 correct for graph/bare/test-llm"));
+        .stdout(predicate::str::contains(
+            "valid: 1/1 for graph/bare/test-llm (optimal length: 1/1)",
+        ));
 
     let written = fs::read_to_string(report.path())?;
-    assert!(written.contains(r#""correct":true"#));
+    assert!(!written.contains("\"correct\""));
     assert!(written.contains(r#""valid":true"#));
     assert!(!written.contains("\"path\""));
     Ok(())
@@ -111,5 +113,55 @@ fn merges_two_answer_files() -> Result<(), Box<dyn std::error::Error>> {
     assert!(written.contains("graph/bare/llm-a"));
     assert!(written.contains("graph/bare/llm-b"));
     assert!(written.contains(r#""error":"not answered""#));
+    Ok(())
+}
+
+#[test]
+fn discovers_answer_files_from_questions_directory() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = assert_fs::TempDir::new()?;
+    let space = Space::new(1)?;
+    let questions = generate(
+        &space,
+        DatasetOptions {
+            count: 1,
+            seed: 0,
+            coordinate: true,
+            graph: true,
+        },
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
+    let questions_path = dir.child("questions.jsonl");
+    write_jsonl(questions_path.path(), questions.iter().cloned().map(Ok))?;
+    let metadata_path = dir.child("metadata.json");
+    write_metadata(metadata_path.path(), &space)?;
+
+    let graph = questions[0].graph.as_ref().expect("graph");
+    let answers_a = dir.child("answers.graph.bare.llm-a.jsonl");
+    answers_a.write_str(&format!(
+        "{}\n",
+        json!({"id": 0, "prediction": graph.path, "error": null}),
+    ))?;
+    let answers_b = dir.child("answers.graph.bare.llm-b.jsonl");
+    answers_b.write_str(&format!(
+        "{}\n",
+        json!({"id": 0, "prediction": graph.path, "error": null}),
+    ))?;
+    let report = dir.child("report.jsonl");
+
+    cargo_bin_cmd!("evaluation")
+        .arg("--questions")
+        .arg(questions_path.path())
+        .arg("--metadata")
+        .arg(metadata_path.path())
+        .arg("--output")
+        .arg(report.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("graph/bare/llm-a"))
+        .stdout(predicate::str::contains("graph/bare/llm-b"));
+
+    let written = fs::read_to_string(report.path())?;
+    assert!(written.contains("graph/bare/llm-a"));
+    assert!(written.contains("graph/bare/llm-b"));
     Ok(())
 }

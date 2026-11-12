@@ -8,6 +8,7 @@ dev = [
     "mypy>=1.15",
     "pytest>=8",
     "ruff>=0.9",
+    "types-tqdm>=4.66",
 ]
 
 [tool.uv.workspace]
@@ -91,6 +92,7 @@ packages = ["solver", "spatial"]
 exclude = [
     "^\\.venv/",
     "^target/",
+    "^langfuse/",
 ]
 
 [[tool.mypy.overrides]]

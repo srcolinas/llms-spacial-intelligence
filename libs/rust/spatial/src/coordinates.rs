@@ -190,6 +190,11 @@ impl fmt::Display for VertexCoordinate {
     }
 }
 
+/// Every `(q, r, d)` name for the same corner, including non-canonical aliases.
+pub fn vertex_name_aliases(vertex: VertexCoordinate) -> [VertexCoordinate; 3] {
+    VertexCoordinate::aliases(vertex.hex(), vertex.direction())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

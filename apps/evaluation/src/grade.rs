@@ -1,15 +1,21 @@
 //! Decide whether a predicted path is a shortest path on the space.
 
-use std::collections::HashMap;
-
 use dataset::Coordinate;
-use spatial::{Direction, HexCoordinate, Space, VertexCoordinate, vertex_labels};
+use spatial::{PathValidation, Space, validate_coordinate_path, validate_graph_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PathGrade {
     pub valid: bool,
     pub length: Option<usize>,
-    pub correct: bool,
+}
+
+impl From<PathValidation> for PathGrade {
+    fn from(validation: PathValidation) -> Self {
+        Self {
+            valid: validation.valid,
+            length: validation.length,
+        }
+    }
 }
 
 pub fn grade_coordinate_path(
@@ -18,32 +24,15 @@ pub fn grade_coordinate_path(
     destination: Coordinate,
     predicted: &[Coordinate],
 ) -> PathGrade {
-    let Some(origin) = to_vertex(space, origin) else {
-        return PathGrade {
-            valid: false,
-            length: None,
-            correct: false,
-        };
-    };
-    let Some(destination) = to_vertex(space, destination) else {
-        return PathGrade {
-            valid: false,
-            length: None,
-            correct: false,
-        };
-    };
-    let mut vertices = Vec::with_capacity(predicted.len());
-    for coordinate in predicted {
-        let Some(vertex) = to_vertex(space, *coordinate) else {
-            return PathGrade {
-                valid: false,
-                length: None,
-                correct: false,
-            };
-        };
-        vertices.push(vertex);
-    }
-    grade_vertices(space, origin, destination, &vertices)
+    grade(validate_coordinate_path(
+        space,
+        (origin.q, origin.r, origin.d),
+        (destination.q, destination.r, destination.d),
+        &predicted
+            .iter()
+            .map(|coordinate| (coordinate.q, coordinate.r, coordinate.d))
+            .collect::<Vec<_>>(),
+    ))
 }
 
 pub fn grade_graph_path(
@@ -52,88 +41,17 @@ pub fn grade_graph_path(
     destination: &str,
     predicted: &[String],
 ) -> PathGrade {
-    let labels = vertex_labels(space);
-    let mut by_label = HashMap::with_capacity(labels.len());
-    for (label, vertex) in labels.iter().zip(space.vertices()) {
-        by_label.insert(label.as_str(), *vertex);
-    }
-    let Some(&origin) = by_label.get(origin) else {
-        return PathGrade {
-            valid: false,
-            length: None,
-            correct: false,
-        };
-    };
-    let Some(&destination) = by_label.get(destination) else {
-        return PathGrade {
-            valid: false,
-            length: None,
-            correct: false,
-        };
-    };
-    let mut vertices = Vec::with_capacity(predicted.len());
-    for label in predicted {
-        let Some(&vertex) = by_label.get(label.as_str()) else {
-            return PathGrade {
-                valid: false,
-                length: None,
-                correct: false,
-            };
-        };
-        vertices.push(vertex);
-    }
-    grade_vertices(space, origin, destination, &vertices)
+    grade(validate_graph_path(space, origin, destination, predicted))
 }
 
-fn grade_vertices(
-    space: &Space,
-    origin: VertexCoordinate,
-    destination: VertexCoordinate,
-    path: &[VertexCoordinate],
-) -> PathGrade {
-    let length = path.len().checked_sub(1);
-    let valid = path_is_valid(space, origin, destination, path);
-    let correct = valid
-        && length.is_some_and(|steps| {
-            space
-                .distance(origin, destination)
-                .is_some_and(|distance| steps == distance)
-        });
-    PathGrade {
-        valid,
-        length,
-        correct,
-    }
-}
-
-fn path_is_valid(
-    space: &Space,
-    origin: VertexCoordinate,
-    destination: VertexCoordinate,
-    path: &[VertexCoordinate],
-) -> bool {
-    let (Some(&first), Some(&last)) = (path.first(), path.last()) else {
-        return false;
-    };
-    if first != origin || last != destination {
-        return false;
-    }
-    path.windows(2)
-        .all(|step| space.neighbors(step[0]).contains(&step[1]))
-}
-
-fn to_vertex(space: &Space, coordinate: Coordinate) -> Option<VertexCoordinate> {
-    let direction = u8::try_from(coordinate.d).ok().and_then(Direction::new)?;
-    Some(VertexCoordinate::new(
-        HexCoordinate::new(coordinate.q, coordinate.r),
-        direction,
-        space.size(),
-    ))
+fn grade(validation: PathValidation) -> PathGrade {
+    validation.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spatial::{Direction, HexCoordinate, Space, VertexCoordinate, vertex_labels};
 
     fn coordinate(q: i8, r: i8, d: i8) -> Coordinate {
         Coordinate { q, r, d }
@@ -144,6 +62,35 @@ mod tests {
             .iter()
             .map(|(q, r, d)| coordinate(*q, *r, *d))
             .collect()
+    }
+
+    fn to_vertex(space: &Space, coordinate: Coordinate) -> Option<VertexCoordinate> {
+        let direction = u8::try_from(coordinate.d).ok().and_then(Direction::new)?;
+        Some(VertexCoordinate::new(
+            HexCoordinate::new(coordinate.q, coordinate.r),
+            direction,
+            space.size(),
+        ))
+    }
+
+    fn is_optimal(
+        space: &Space,
+        origin: Coordinate,
+        destination: Coordinate,
+        grade: PathGrade,
+    ) -> bool {
+        grade.valid
+            && grade.length.is_some_and(|steps| {
+                let Some(origin) = to_vertex(space, origin) else {
+                    return false;
+                };
+                let Some(destination) = to_vertex(space, destination) else {
+                    return false;
+                };
+                space
+                    .distance(origin, destination)
+                    .is_some_and(|distance| steps == distance)
+            })
     }
 
     #[test]
@@ -163,23 +110,23 @@ mod tests {
         ]);
 
         let exact = grade_coordinate_path(&space, origin, destination, &stored);
-        assert!(exact.correct);
+        assert!(is_optimal(&space, origin, destination, exact));
         assert!(exact.valid);
         assert_eq!(exact.length, Some(3));
 
         let other = grade_coordinate_path(&space, origin, destination, &alternate);
-        assert!(other.correct);
+        assert!(is_optimal(&space, origin, destination, other));
         assert!(other.valid);
         assert_eq!(other.length, Some(3));
 
         let rejected = grade_coordinate_path(&space, origin, destination, &longer);
-        assert!(!rejected.correct);
+        assert!(!is_optimal(&space, origin, destination, rejected));
         assert!(rejected.valid);
         assert_eq!(rejected.length, Some(5));
     }
 
     #[test]
-    fn valid_but_too_long_path_is_not_correct() {
+    fn valid_but_too_long_path_is_not_optimal() {
         let space = Space::new(1).expect("space");
         let origin = coordinate(0, 0, 0);
         let destination = coordinate(0, 0, 3);
@@ -195,7 +142,7 @@ mod tests {
         let grade = grade_coordinate_path(&space, origin, destination, &detour);
         assert!(grade.valid);
         assert_eq!(grade.length, Some(5));
-        assert!(!grade.correct);
+        assert!(!is_optimal(&space, origin, destination, grade));
     }
 
     #[test]
@@ -226,12 +173,10 @@ mod tests {
         let destination_label = stored[2].clone();
 
         let exact = grade_graph_path(&space, &origin_label, &destination_label, &stored);
-        assert!(exact.correct);
         assert!(exact.valid);
+        assert_eq!(exact.length, Some(2));
 
-        let rejected =
-            grade_graph_path(&space, &origin_label, &destination_label, &broken);
-        assert!(!rejected.correct);
+        let rejected = grade_graph_path(&space, &origin_label, &destination_label, &broken);
         assert!(!rejected.valid);
     }
 

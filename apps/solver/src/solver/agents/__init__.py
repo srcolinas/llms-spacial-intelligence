@@ -8,6 +8,11 @@ from typing import Any
 import pydantic_ai
 
 from solver.agents.bare import build_bare_coordinates, build_bare_graph
+from solver.agents.validating import (
+    ValidationDeps,
+    build_validating_coordinates,
+    build_validating_graph,
+)
 from solver.dataset import ProblemKind
 
 AgentBuilder = Callable[[str, str], pydantic_ai.Agent[Any, Any]]
@@ -15,6 +20,8 @@ AgentBuilder = Callable[[str, str], pydantic_ai.Agent[Any, Any]]
 AGENTS: dict[tuple[str, ProblemKind], AgentBuilder] = {
     ("bare", "coordinates"): build_bare_coordinates,
     ("bare", "graph"): build_bare_graph,
+    ("validating", "coordinates"): build_validating_coordinates,
+    ("validating", "graph"): build_validating_graph,
 }
 
 AGENT_NAMES = sorted({name for name, _ in AGENTS})
@@ -39,3 +46,11 @@ def build_agent(
             f"expected one of: {known}"
         ) from exc
     return builder(model, space_description)
+
+
+__all__ = [
+    "AGENTS",
+    "AGENT_NAMES",
+    "ValidationDeps",
+    "build_agent",
+]

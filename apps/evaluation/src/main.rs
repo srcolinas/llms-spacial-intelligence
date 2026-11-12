@@ -4,8 +4,8 @@ use std::process::ExitCode;
 use anyhow::Context;
 use clap::Parser;
 use evaluation::{
-    REPORT_FILENAME, agent_summaries, evaluate_files, load_answer_file, load_jsonl, load_size,
-    write_report,
+    REPORT_FILENAME, agent_summaries, data_dir_for_questions, evaluate_files, load_answer_file,
+    load_jsonl, load_size, resolve_answer_paths, write_report,
 };
 use spatial::Space;
 
@@ -17,8 +17,8 @@ struct Args {
     #[arg(long, default_value = "data/questions.jsonl", value_name = "FILE")]
     questions: PathBuf,
 
-    /// Answers JSONL produced by the solver (repeat for multiple agents)
-    #[arg(long, value_name = "FILE", required = true)]
+    /// Answers JSONL produced by the solver (repeat for multiple agents; defaults to answers.*.jsonl next to the questions file)
+    #[arg(long, value_name = "FILE")]
     answers: Vec<PathBuf>,
 
     /// Space metadata JSON (defaults to metadata.json next to the questions file)
@@ -46,8 +46,15 @@ fn run(args: Args) -> anyhow::Result<()> {
     let space = Space::new(size)?;
     let questions = load_jsonl(&args.questions)
         .with_context(|| format!("could not read questions from {}", args.questions.display()))?;
-    let answer_files = args
-        .answers
+    let answer_paths = resolve_answer_paths(&args.questions, &args.answers)?;
+    if answer_paths.is_empty() {
+        let dir = data_dir_for_questions(&args.questions)?;
+        anyhow::bail!(
+            "no answer files found in `{}`; pass --answers or add answers.<problem>.<agent>.<llm>.jsonl files",
+            dir.display()
+        );
+    }
+    let answer_files = answer_paths
         .iter()
         .map(|path| {
             load_answer_file(path)
@@ -61,7 +68,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         .unwrap_or_else(|| sibling(&args.questions, REPORT_FILENAME));
     write_report(&output, &report)
         .with_context(|| format!("could not write {}", output.display()))?;
-    for summary in agent_summaries(&report) {
+    for summary in agent_summaries(&report, &answer_files) {
         println!("{summary}");
     }
     println!("Wrote {}", output.display());

@@ -8,7 +8,7 @@ use dataset::{Coordinate, Question, SpaceMetadata, space_metadata};
 use evaluation::{AnswerFile, EvaluationReport, Problem, load_answer_file, load_report};
 use serde::Serialize;
 use serde_json::Value;
-use spatial::{Space, VertexCoordinate, vertex_labels};
+use spatial::{Space, VertexCoordinate, vertex_labels, vertex_name_aliases};
 
 const HEX_RADIUS: f64 = 44.0;
 
@@ -18,6 +18,8 @@ pub struct ViewerPayload {
     pub graph: Option<BTreeMap<String, Vec<String>>>,
     pub questions: Vec<Question>,
     pub space: SpaceGeometry,
+    /// Maps `"q,r,d"` strings (including non-canonical aliases) to vertex indices.
+    pub coordinate_index: BTreeMap<String, usize>,
     pub evaluation: Option<EvaluationReport>,
     pub answers: Option<AnswersPayload>,
 }
@@ -46,6 +48,8 @@ pub struct StoredAnswer {
     pub prediction: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mistakes: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,15 +98,14 @@ pub fn load_payload(
     let questions = load_questions(questions_path)?;
     let graph = graph_path.map(load_graph).transpose()?;
     let space_geometry = build_geometry(&space);
+    let coordinate_index = build_coordinate_index(&space);
     let evaluation = evaluation_path
         .map(load_report)
         .transpose()
         .with_context(|| {
             format!(
                 "could not load evaluation from `{}`",
-                evaluation_path
-                    .unwrap_or(metadata_path)
-                    .display()
+                evaluation_path.unwrap_or(metadata_path).display()
             )
         })?;
     let loaded_answers = answer_files
@@ -123,9 +126,29 @@ pub fn load_payload(
         graph,
         questions,
         space: space_geometry,
+        coordinate_index,
         evaluation,
         answers,
     })
+}
+
+fn build_coordinate_index(space: &Space) -> BTreeMap<String, usize> {
+    let mut index = BTreeMap::new();
+    for (vertex_index, vertex) in space.vertices().iter().enumerate() {
+        for alias in vertex_name_aliases(*vertex) {
+            index.insert(coordinate_key(alias), vertex_index);
+        }
+    }
+    index
+}
+
+fn coordinate_key(vertex: VertexCoordinate) -> String {
+    format!(
+        "{},{},{}",
+        vertex.hex().q,
+        vertex.hex().r,
+        vertex.direction().get()
+    )
 }
 
 fn build_answers_payload(answer_files: &[AnswerFile]) -> AnswersPayload {
@@ -144,6 +167,7 @@ fn build_answers_payload(answer_files: &[AnswerFile]) -> AnswersPayload {
                 StoredAnswer {
                     prediction: answer.prediction.clone(),
                     error: answer.error.clone(),
+                    mistakes: answer.mistakes,
                 },
             );
         }
@@ -393,7 +417,74 @@ mod tests {
         .expect("payload");
         let evaluation = payload.evaluation.expect("evaluation");
         assert_eq!(evaluation.agents, vec!["graph/bare/test-llm".to_string()]);
-        assert!(evaluation.rows[0].agents["graph/bare/test-llm"].correct);
+        let result = &evaluation.rows[0].agents["graph/bare/test-llm"];
+        assert!(result.valid);
+        assert_eq!(result.length, Some(evaluation.rows[0].expected_length));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_answers_and_evaluation_from_directory_by_default() {
+        use evaluation::{REPORT_FILENAME, evaluate_files, resolve_answer_paths, write_report};
+
+        let space = Space::new(1).expect("space");
+        let questions = generate(
+            &space,
+            DatasetOptions {
+                count: 1,
+                seed: 0,
+                coordinate: true,
+                graph: true,
+            },
+        )
+        .expect("generator")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("questions");
+
+        let dir = std::env::temp_dir().join(format!("viewer-dir-default-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let questions_path = dir.join("questions.jsonl");
+        let metadata_path = dir.join("metadata.json");
+        write_jsonl(&questions_path, questions.iter().cloned().map(Ok)).expect("write questions");
+        write_metadata(&metadata_path, &space).expect("write metadata");
+
+        let graph = questions[0].graph.as_ref().expect("graph");
+        let answers_path = dir.join("answers.graph.bare.test-llm.jsonl");
+        std::fs::write(
+            &answers_path,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "id": questions[0].id,
+                    "prediction": graph.path,
+                    "error": null,
+                })
+            ),
+        )
+        .expect("write answers");
+        let answer_file = evaluation::load_answer_file(&answers_path).expect("load answers");
+        let report = evaluate_files(&space, &questions, &[answer_file]).expect("evaluate");
+        let evaluation_path = dir.join(REPORT_FILENAME);
+        write_report(&evaluation_path, &report).expect("write report");
+
+        let answer_paths = resolve_answer_paths(&questions_path, &[]).expect("resolve answers");
+        let payload = load_payload(
+            &questions_path,
+            &metadata_path,
+            None,
+            Some(&evaluation_path),
+            &answer_paths,
+        )
+        .expect("payload");
+        let answers = payload.answers.expect("answers");
+        assert_eq!(answers.agents.len(), 1);
+        assert_eq!(answers.agents[0].key, "graph/bare/test-llm");
+        let evaluation = payload.evaluation.expect("evaluation");
+        assert_eq!(evaluation.agents, vec!["graph/bare/test-llm".to_string()]);
+        let result = &evaluation.rows[0].agents["graph/bare/test-llm"];
+        assert!(result.valid);
+        assert_eq!(result.length, Some(evaluation.rows[0].expected_length));
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -444,6 +535,16 @@ mod tests {
         assert_eq!(answers.rows.len(), 1);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn coordinate_index_includes_non_canonical_aliases() {
+        let space = Space::new(3).expect("space");
+        let index = build_coordinate_index(&space);
+        assert!(index.contains_key("1,0,0"));
+        assert!(index.contains_key("1,-1,0"));
+        assert!(index.contains_key("1,0,1"));
+        assert_eq!(index.len(), space.vertices().len() * 3);
     }
 
     #[test]

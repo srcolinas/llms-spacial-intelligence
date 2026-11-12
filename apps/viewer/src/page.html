@@ -76,12 +76,26 @@
   }
   .layer-control label {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
     cursor: pointer;
     user-select: none;
     min-width: 220px;
   }
+  .layer-name-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .layer-eval {
+    font-size: 11px;
+    color: #64748b;
+    line-height: 1.3;
+  }
+  .layer-eval .valid-yes { color: #047857; font-weight: 600; }
+  .layer-eval .valid-no { color: #b45309; font-weight: 600; }
+  .layer-eval .valid-missing { color: #94a3b8; }
   .layer-control input { margin: 0; cursor: pointer; }
   .layer-control .step-nav {
     display: inline-flex;
@@ -188,6 +202,17 @@
   }
   .metric-card dt { color: #64748b; }
   .metric-card dd { margin: 0; font-weight: 600; }
+  .problem-section {
+    margin-bottom: 36px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .problem-section:last-child { border-bottom: none; }
+  .problem-section > h2 {
+    margin: 0 0 16px;
+    font-size: 18px;
+    font-weight: 700;
+  }
 </style>
 </head>
 <body>
@@ -233,25 +258,17 @@ const OPTIMAL_COLOR = "#047857";
 const GROUND_TRUTH_KEY = "optimal";
 const LANE_SPACING = 7;
 
-function answerProblem() {
-  const agents = DATA.answers?.agents ?? [];
-  if (agents.length === 0) return null;
-  const problems = [...new Set(agents.map((entry) => entry.problem))];
-  return problems[0] ?? null;
-}
-
-const lockedProblem = answerProblem();
-const modeLocked = lockedProblem != null;
-
 let page = "browse";
-let mode = lockedProblem
-  ?? (DATA.questions.some((q) => q.coordinates) ? "coordinates" : "graph");
+let mode = DATA.questions.some((q) => q.coordinates) ? "coordinates" : "graph";
 let row = 0;
 const visibleLayers = new Set([GROUND_TRUTH_KEY]);
 const layerSteps = new Map();
 
 const answersById = new Map(
   (DATA.answers?.rows ?? []).map((entry) => [entry.id, entry]),
+);
+const evaluationById = new Map(
+  (DATA.evaluation?.rows ?? []).map((entry) => [entry.id, entry]),
 );
 const agentProblem = new Map(
   (DATA.answers?.agents ?? []).map((entry) => [entry.key, entry.problem]),
@@ -261,11 +278,13 @@ const labelIndex = new Map(
   DATA.space.vertices.map((vertex, index) => [vertex.label, index]),
 );
 const coordinateIndex = new Map(
-  DATA.space.vertices.map((vertex, index) => [
-    `${vertex.q},${vertex.r},${vertex.d}`,
-    index,
-  ]),
+  Object.entries(DATA.coordinate_index ?? {}).map(([key, index]) => [key, index]),
 );
+if (coordinateIndex.size === 0) {
+  DATA.space.vertices.forEach((vertex, index) => {
+    coordinateIndex.set(`${vertex.q},${vertex.r},${vertex.d}`, index);
+  });
+}
 
 function escapeXml(value) {
   return String(value)
@@ -290,8 +309,38 @@ function agentKeys() {
   return (DATA.answers?.agents ?? []).map((entry) => entry.key);
 }
 
+function agentProblemType(agentKey) {
+  if (agentProblem.has(agentKey)) {
+    return agentProblem.get(agentKey);
+  }
+  const prefix = agentKey.split("/")[0];
+  if (prefix === "coordinates" || prefix === "graph") {
+    return prefix;
+  }
+  return mode;
+}
+
+function agentKeysForMode(problem) {
+  return agentKeys().filter((key) => agentProblemType(key) === problem);
+}
+
 function hasAgentAnswers() {
   return agentKeys().length > 0;
+}
+
+function hasBothModes() {
+  return hasMode("coordinates") && hasMode("graph");
+}
+
+function resetAgentLayersForMode() {
+  for (const key of [...visibleLayers]) {
+    if (key.startsWith("agent:")) {
+      visibleLayers.delete(key);
+    }
+  }
+  for (const agentKey of agentKeysForMode(mode)) {
+    visibleLayers.add(`agent:${agentKey}`);
+  }
 }
 
 function currentQuestion() {
@@ -401,34 +450,46 @@ function segmentOffset(x1, y1, x2, y2, amount) {
   return { dx: (-dy / len) * amount, dy: (dx / len) * amount };
 }
 
+function vertexAt(index) {
+  if (index == null) return null;
+  return DATA.space.vertices[index] ?? null;
+}
+
 function offsetVertexOnPath(pathIndices, pathIndex, laneIndex, laneCount) {
-  const vertexIndex = pathIndices[pathIndex];
-  if (vertexIndex == null) return null;
-  const vertex = DATA.space.vertices[vertexIndex];
+  const vertex = vertexAt(pathIndices[pathIndex]);
+  if (!vertex) return null;
   const amount = laneOffset(laneIndex, laneCount);
   let ox = 0;
   let oy = 0;
   let count = 0;
   if (pathIndex > 0) {
-    const prev = DATA.space.vertices[pathIndices[pathIndex - 1]];
-    const shift = segmentOffset(prev.x, prev.y, vertex.x, vertex.y, amount);
-    ox += shift.dx;
-    oy += shift.dy;
-    count += 1;
+    const prev = vertexAt(pathIndices[pathIndex - 1]);
+    if (prev) {
+      const shift = segmentOffset(prev.x, prev.y, vertex.x, vertex.y, amount);
+      ox += shift.dx;
+      oy += shift.dy;
+      count += 1;
+    }
   }
   if (pathIndex < pathIndices.length - 1) {
-    const next = DATA.space.vertices[pathIndices[pathIndex + 1]];
-    const shift = segmentOffset(vertex.x, vertex.y, next.x, next.y, amount);
-    ox += shift.dx;
-    oy += shift.dy;
-    count += 1;
+    const next = vertexAt(pathIndices[pathIndex + 1]);
+    if (next) {
+      const shift = segmentOffset(vertex.x, vertex.y, next.x, next.y, amount);
+      ox += shift.dx;
+      oy += shift.dy;
+      count += 1;
+    }
+  }
+  if (count === 0) {
+    return { x: vertex.x, y: vertex.y };
   }
   return { x: vertex.x + ox / count, y: vertex.y + oy / count };
 }
 
 function offsetEdgeMarkup(a, b, color, width, laneIndex, laneCount) {
-  const start = DATA.space.vertices[a];
-  const end = DATA.space.vertices[b];
+  const start = vertexAt(a);
+  const end = vertexAt(b);
+  if (!start || !end) return "";
   const amount = laneOffset(laneIndex, laneCount);
   const shift = segmentOffset(start.x, start.y, end.x, end.y, amount);
   return `<line x1="${start.x + shift.dx}" y1="${start.y + shift.dy}" x2="${end.x + shift.dx}" y2="${end.y + shift.dy}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>`;
@@ -463,7 +524,7 @@ function layerMarkerMarkup(x, y, color, { ring = false, visited = false } = {}) 
 
 function layerDefinitions() {
   const layers = [{ key: GROUND_TRUTH_KEY, color: OPTIMAL_COLOR, width: 3.5 }];
-  agentKeys().forEach((agentKey, index) => {
+  agentKeysForMode(mode).forEach((agentKey, index) => {
     layers.push({
       key: `agent:${agentKey}`,
       color: agentColor(index),
@@ -516,16 +577,28 @@ function traveledEdgeKeys(pathIndices, uptoStep) {
   return keys;
 }
 
+function includePoint(minX, minY, maxX, maxY, x, y) {
+  return [
+    Math.min(minX, x),
+    Math.min(minY, y),
+    Math.max(maxX, x),
+    Math.max(maxY, y),
+  ];
+}
+
 function bounds() {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const vertex of DATA.space.vertices) {
-    minX = Math.min(minX, vertex.x);
-    minY = Math.min(minY, vertex.y);
-    maxX = Math.max(maxX, vertex.x);
-    maxY = Math.max(maxY, vertex.y);
+    [minX, minY, maxX, maxY] = includePoint(minX, minY, maxX, maxY, vertex.x, vertex.y);
+  }
+  for (const hex of DATA.space.hexes) {
+    for (const pair of hex.points.split(" ")) {
+      const [x, y] = pair.split(",").map(Number);
+      [minX, minY, maxX, maxY] = includePoint(minX, minY, maxX, maxY, x, y);
+    }
   }
   const pad = 56;
   return {
@@ -578,7 +651,7 @@ function renderSpace() {
   const parts = [];
   for (const hex of DATA.space.hexes) {
     parts.push(
-      `<polygon points="${hex.points}" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>`,
+      `<polygon points="${hex.points}" fill="#dbeafe" stroke="#64748b" stroke-width="1.5"/>`,
     );
     if (mode === "coordinates") {
       parts.push(hexLabelMarkup(hex));
@@ -647,6 +720,44 @@ function renderSpace() {
   svg.innerHTML = parts.join("");
 }
 
+function agentAnswer(agentKey, questionId) {
+  const row = answersById.get(questionId);
+  return row?.agents?.[agentKey] ?? null;
+}
+
+function agentMistakeCount(agentKey, questionId) {
+  const answer = agentAnswer(agentKey, questionId);
+  if (!answer) return null;
+  return answer.mistakes ?? 0;
+}
+
+function formatMistakes(count) {
+  return count === 1 ? "1 mistake" : `${count} mistakes`;
+}
+
+function agentEvalCaption(agentKey, questionId) {
+  const parts = [];
+  const rowData = evaluationById.get(questionId);
+  if (rowData) {
+    const result = rowData.agents[agentKey];
+    if (!result || result.error === "not answered") {
+      return { html: `<span class="valid-missing">not answered</span>` };
+    }
+    const validClass = result.valid ? "valid-yes" : "valid-no";
+    const validText = result.valid ? "valid" : "invalid";
+    const lengthText = result.length == null
+      ? "—"
+      : `${result.length}/${rowData.expected_length}`;
+    parts.push(`<span class="${validClass}">${validText}</span> · length ${lengthText}`);
+  }
+  const mistakes = agentMistakeCount(agentKey, questionId);
+  if (mistakes !== null) {
+    parts.push(formatMistakes(mistakes));
+  }
+  if (parts.length === 0) return null;
+  return { html: parts.join(" · ") };
+}
+
 function renderRows() {
   const rows = document.getElementById("rows");
   rows.replaceChildren();
@@ -667,7 +778,7 @@ function renderRows() {
 function renderTabs() {
   const modeTabs = document.getElementById("mode-tabs");
   const browseLayout = document.getElementById("browse-layout");
-  if (modeLocked) {
+  if (!hasBothModes()) {
     modeTabs.classList.add("hidden");
     browseLayout.classList.add("no-mode-tabs");
     return;
@@ -736,9 +847,22 @@ function renderLayerControls() {
     const swatch = document.createElement("i");
     swatch.className = "swatch";
     swatch.style.background = layer.color;
+    const nameCol = document.createElement("span");
+    nameCol.className = "layer-name-col";
     const text = document.createElement("span");
     text.textContent = layerLabel(layer.key, layer.color);
-    label.append(checkbox, swatch, text);
+    nameCol.append(text);
+    if (layer.key.startsWith("agent:")) {
+      const agentKey = layer.key.slice("agent:".length);
+      const evalCaption = agentEvalCaption(agentKey, question.id);
+      if (evalCaption) {
+        const evalEl = document.createElement("span");
+        evalEl.className = "layer-eval";
+        evalEl.innerHTML = evalCaption.html;
+        nameCol.append(evalEl);
+      }
+    }
+    label.append(checkbox, swatch, nameCol);
 
     const nav = document.createElement("div");
     nav.className = "step-nav";
@@ -793,7 +917,7 @@ function renderLegend() {
     `<span><i class="swatch" style="background:#047857"></i> Origin</span>`,
     `<span><i class="swatch" style="background:#b45309"></i> Destination</span>`,
   ];
-  agentKeys().forEach((agentKey, index) => {
+  agentKeysForMode(mode).forEach((agentKey, index) => {
     items.push(
       `<span><i class="swatch" style="background:${agentColor(index)}"></i> ${escapeXml(shortAgentLabel(agentKey))}</span>`,
     );
@@ -806,27 +930,87 @@ function renderQuestionCaption() {
     `Question ${currentQuestion().id}`;
 }
 
-function agentStats() {
+function agentStats(problem) {
   if (!DATA.evaluation) return [];
   const total = DATA.evaluation.rows.length;
-  return DATA.evaluation.agents.map((agentKey) => {
+  return agentKeysForMode(problem).map((agentKey) => {
     let answered = 0;
     let valid = 0;
     let optimalLength = 0;
-    let correct = 0;
     for (const rowData of DATA.evaluation.rows) {
       const result = rowData.agents[agentKey];
       if (!result || result.error === "not answered") continue;
       answered += 1;
-      if (result.valid) valid += 1;
-      if (result.length === rowData.expected_length) optimalLength += 1;
-      if (result.correct) correct += 1;
+      if (result.valid) {
+        valid += 1;
+        if (result.length === rowData.expected_length) optimalLength += 1;
+      }
     }
-    return { agentKey, total, answered, valid, optimalLength, correct };
+    return { agentKey, total, answered, valid, optimalLength };
   });
 }
 
-function renderBarChart(title, stats, field) {
+function mistakeStats(problem) {
+  const agentKeys = agentKeysForMode(problem);
+  return agentKeys.map((agentKey) => {
+    const buckets = new Map();
+    let answered = 0;
+    let totalMistakes = 0;
+    for (const question of DATA.questions) {
+      const mistakeCount = agentMistakeCount(agentKey, question.id);
+      if (mistakeCount === null) continue;
+      if (DATA.evaluation) {
+        const rowData = evaluationById.get(question.id);
+        const result = rowData?.agents[agentKey];
+        if (!result || result.error === "not answered") continue;
+      }
+      answered += 1;
+      totalMistakes += mistakeCount;
+      buckets.set(mistakeCount, (buckets.get(mistakeCount) ?? 0) + 1);
+    }
+    return {
+      agentKey,
+      answered,
+      totalMistakes,
+      avgMistakes: answered > 0 ? totalMistakes / answered : 0,
+      buckets,
+    };
+  });
+}
+
+function renderMistakeDistribution(problem, stats) {
+  const agentKeys = agentKeysForMode(problem);
+  const block = document.createElement("div");
+  block.className = "chart-block";
+  const heading = document.createElement("h2");
+  heading.textContent = "Mistake distribution";
+  block.append(heading);
+  for (const entry of stats) {
+    if (entry.answered === 0) continue;
+    const agentIndex = agentKeys.indexOf(entry.agentKey);
+    const subheading = document.createElement("h2");
+    subheading.style.fontSize = "13px";
+    subheading.style.fontWeight = "600";
+    subheading.style.margin = "12px 0 6px";
+    subheading.textContent = shortAgentLabel(entry.agentKey);
+    block.append(subheading);
+    const sortedBuckets = [...entry.buckets.entries()].sort((a, b) => a[0] - b[0]);
+    for (const [mistakeCount, count] of sortedBuckets) {
+      const pct = Math.round((count / entry.answered) * 100);
+      const rowEl = document.createElement("div");
+      rowEl.className = "chart-row";
+      rowEl.innerHTML = `
+        <span>${formatMistakes(mistakeCount)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${agentColor(agentIndex)}"></div></div>
+        <span>${count}/${entry.answered}</span>
+      `;
+      block.append(rowEl);
+    }
+  }
+  return block;
+}
+
+function renderBarChart(title, stats, field, denominatorField) {
   const block = document.createElement("div");
   block.className = "chart-block";
   const heading = document.createElement("h2");
@@ -834,47 +1018,72 @@ function renderBarChart(title, stats, field) {
   block.append(heading);
   stats.forEach((entry, index) => {
     const count = entry[field];
-    const denominator = entry.answered || 1;
+    const denominator = entry[denominatorField] || 1;
     const pct = Math.round((count / denominator) * 100);
     const rowEl = document.createElement("div");
     rowEl.className = "chart-row";
     rowEl.innerHTML = `
       <span>${escapeXml(shortAgentLabel(entry.agentKey))}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${agentColor(index)}"></div></div>
-      <span>${count}/${entry.answered}</span>
+      <span>${count}/${denominator}</span>
     `;
     block.append(rowEl);
   });
   return block;
 }
 
+function problemTitle(problem) {
+  return problem === "coordinates" ? "Coordinates problem" : "Graph problem";
+}
+
 function renderOverview() {
   if (!hasEvaluation()) return;
-  const stats = agentStats();
+  const problems = ["coordinates", "graph"].filter(
+    (problem) => agentKeysForMode(problem).length > 0,
+  );
+  const questionCount = DATA.evaluation.rows.length;
   document.getElementById("overview-meta").textContent =
-    `${stats.length} agents · ${stats[0]?.total ?? 0} questions`;
+    `${agentKeys().length} agents · ${questionCount} questions · ${problems.length} problem types`;
   const histograms = document.getElementById("histograms");
   histograms.replaceChildren();
-  histograms.append(
-    renderBarChart("Valid paths", stats, "valid"),
-    renderBarChart("Optimal length", stats, "optimalLength"),
-    renderBarChart("Correct (valid + shortest)", stats, "correct"),
-  );
-  const cards = document.getElementById("metric-cards");
-  cards.replaceChildren();
-  for (const entry of stats) {
-    const card = document.createElement("div");
-    card.className = "metric-card";
-    card.innerHTML = `
-      <h3>${escapeXml(entry.agentKey)}</h3>
-      <dl>
-        <dt>Answered</dt><dd>${entry.answered}/${entry.total}</dd>
-        <dt>Valid</dt><dd>${entry.valid}/${entry.answered}</dd>
-        <dt>Optimal length</dt><dd>${entry.optimalLength}/${entry.answered}</dd>
-        <dt>Correct</dt><dd>${entry.correct}/${entry.total}</dd>
-      </dl>
-    `;
-    cards.append(card);
+  document.getElementById("metric-cards").replaceChildren();
+  for (const problem of problems) {
+    const stats = agentStats(problem);
+    if (stats.length === 0) continue;
+    const mistakes = mistakeStats(problem);
+    const mistakesByAgent = new Map(mistakes.map((entry) => [entry.agentKey, entry]));
+    const section = document.createElement("section");
+    section.className = "problem-section";
+    const heading = document.createElement("h2");
+    heading.textContent = problemTitle(problem);
+    section.append(heading);
+    section.append(
+      renderBarChart("Valid paths", stats, "valid", "answered"),
+      renderBarChart("Optimal length", stats, "optimalLength", "valid"),
+      renderMistakeDistribution(problem, mistakes),
+    );
+    const cards = document.createElement("div");
+    cards.className = "metric-grid";
+    for (const entry of stats) {
+      const mistakeEntry = mistakesByAgent.get(entry.agentKey);
+      const totalMistakes = mistakeEntry?.totalMistakes ?? 0;
+      const avgMistakes = mistakeEntry?.avgMistakes ?? 0;
+      const card = document.createElement("div");
+      card.className = "metric-card";
+      card.innerHTML = `
+        <h3>${escapeXml(entry.agentKey)}</h3>
+        <dl>
+          <dt>Answered</dt><dd>${entry.answered}/${entry.total}</dd>
+          <dt>Valid</dt><dd>${entry.valid}/${entry.answered}</dd>
+          <dt>Optimal length</dt><dd>${entry.optimalLength}/${entry.valid}</dd>
+          <dt>Total mistakes</dt><dd>${totalMistakes}</dd>
+          <dt>Avg mistakes</dt><dd>${avgMistakes.toFixed(1)}</dd>
+        </dl>
+      `;
+      cards.append(card);
+    }
+    section.append(cards);
+    histograms.append(section);
   }
 }
 
@@ -905,20 +1114,22 @@ document.getElementById("page-overview").addEventListener("click", () => {
 });
 
 document.getElementById("tab-coordinates").addEventListener("click", () => {
-  if (modeLocked || !hasMode("coordinates") || mode === "coordinates") return;
+  if (!hasMode("coordinates") || mode === "coordinates") return;
   mode = "coordinates";
   resetLayerSteps();
+  resetAgentLayersForMode();
   render();
 });
 
 document.getElementById("tab-graph").addEventListener("click", () => {
-  if (modeLocked || !hasMode("graph") || mode === "graph") return;
+  if (!hasMode("graph") || mode === "graph") return;
   mode = "graph";
   resetLayerSteps();
+  resetAgentLayersForMode();
   render();
 });
 
-if (!modeLocked && !hasMode("coordinates") && hasMode("graph")) {
+if (!hasMode("coordinates") && hasMode("graph")) {
   mode = "graph";
 }
 
@@ -926,9 +1137,7 @@ if (!hasEvaluation()) {
   document.getElementById("page-overview").disabled = true;
 }
 if (hasAgentAnswers()) {
-  for (const agentKey of agentKeys()) {
-    visibleLayers.add(`agent:${agentKey}`);
-  }
+  resetAgentLayersForMode();
 }
 
 render();

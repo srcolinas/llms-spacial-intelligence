@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use evaluation::{REPORT_FILENAME, discover_answer_files};
+use evaluation::{REPORT_FILENAME, resolve_answer_paths};
 use tiny_http::{Header, Response, Server};
 
 use crate::payload::load_payload;
@@ -71,7 +71,12 @@ fn data_dir(args: &Args) -> Result<PathBuf> {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .map(Path::to_path_buf)
-            .ok_or_else(|| anyhow::anyhow!("could not infer data directory from `{}`", args.path.display()));
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not infer data directory from `{}`",
+                    args.path.display()
+                )
+            });
     }
     bail!("path not found: `{}`", args.path.display());
 }
@@ -100,11 +105,7 @@ fn resolve_inputs(args: &Args) -> Result<ResolvedInputs> {
         let candidate = dir.join(REPORT_FILENAME);
         candidate.is_file().then_some(candidate)
     });
-    let answers = if args.answers.is_empty() {
-        discover_answer_files(&dir)?
-    } else {
-        args.answers.clone()
-    };
+    let answers = resolve_answer_paths(&questions, &args.answers)?;
     Ok(ResolvedInputs {
         questions,
         metadata,

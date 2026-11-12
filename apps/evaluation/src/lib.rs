@@ -33,7 +33,7 @@ impl fmt::Display for Problem {
     }
 }
 
-/// Solver answer row: `{id, prediction, error}`.
+/// Solver answer row: `{id, prediction, error, mistakes?}`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SolverAnswerRow {
     pub id: u32,
@@ -41,6 +41,13 @@ pub struct SolverAnswerRow {
     pub prediction: Option<Value>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub mistakes: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AnswerFileMeta {
+    pub attempts: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,11 +56,11 @@ pub struct AnswerFile {
     pub agent_key: String,
     pub problem: Problem,
     pub answers: Vec<SolverAnswerRow>,
+    pub attempts: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentResult {
-    pub correct: bool,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<usize>,
@@ -79,26 +86,28 @@ pub struct EvaluationReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSummary {
     pub agent_key: String,
-    pub correct: usize,
     pub valid: usize,
     pub optimal_length: usize,
     pub answered: usize,
     pub total: usize,
+    pub attempts: Option<u32>,
+    pub mistakes: usize,
 }
 
 impl fmt::Display for AgentSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}/{} correct for {} (valid: {}/{}, optimal length: {}/{})",
-            self.correct,
-            self.total,
-            self.agent_key,
-            self.valid,
-            self.answered,
-            self.optimal_length,
-            self.answered,
-        )
+            "valid: {}/{} for {} (optimal length: {}/{}",
+            self.valid, self.answered, self.agent_key, self.optimal_length, self.valid,
+        )?;
+        if let Some(attempts) = self.attempts {
+            write!(f, ", attempts: {attempts}")?;
+        }
+        if self.mistakes > 0 {
+            write!(f, ", mistakes: {}", self.mistakes)?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -113,10 +122,9 @@ pub enum EvaluationError {
 impl fmt::Display for EvaluationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownQuestionId { id, questions } => write!(
-                f,
-                "answer id {id} is outside the {questions} questions"
-            ),
+            Self::UnknownQuestionId { id, questions } => {
+                write!(f, "answer id {id} is outside the {questions} questions")
+            }
             Self::DuplicateAnswer { agent_key, id } => {
                 write!(f, "duplicate answer id {id} in {agent_key}")
             }
@@ -200,17 +208,34 @@ pub fn agent_key(problem: Problem, agent: &str, llm: &str) -> String {
     format!("{problem}/{agent}/{llm}")
 }
 
+pub fn answer_meta_path(path: &Path) -> PathBuf {
+    path.with_extension("meta.json")
+}
+
+pub fn load_answer_meta(path: &Path) -> anyhow::Result<Option<AnswerFileMeta>> {
+    let meta_path = answer_meta_path(path);
+    if !meta_path.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&meta_path)
+        .with_context(|| format!("could not read {}", meta_path.display()))?;
+    let metadata: AnswerFileMeta = serde_json::from_str(&text)
+        .with_context(|| format!("invalid answer metadata at {}", meta_path.display()))?;
+    Ok(Some(metadata))
+}
+
 pub fn load_answer_file(path: &Path) -> anyhow::Result<AnswerFile> {
-    let (problem, agent, llm) = parse_answer_filename(path).map_err(|error| {
-        anyhow::anyhow!(error)
-    })?;
+    let (problem, agent, llm) =
+        parse_answer_filename(path).map_err(|error| anyhow::anyhow!(error))?;
     let key = agent_key(problem, &agent, &llm);
     let answers = load_jsonl(path)?;
+    let attempts = load_answer_meta(path)?.map(|meta| meta.attempts);
     Ok(AnswerFile {
         path: path.to_path_buf(),
         agent_key: key,
         problem,
         answers,
+        attempts,
     })
 }
 
@@ -270,12 +295,13 @@ pub fn evaluate_files(
 
     for row in &mut rows {
         for key in &agent_keys {
-            row.agents.entry(key.clone()).or_insert_with(|| AgentResult {
-                correct: false,
-                valid: false,
-                length: None,
-                error: Some("not answered".to_string()),
-            });
+            row.agents
+                .entry(key.clone())
+                .or_insert_with(|| AgentResult {
+                    valid: false,
+                    length: None,
+                    error: Some("not answered".to_string()),
+                });
         }
     }
 
@@ -287,13 +313,15 @@ pub fn evaluate_files(
     })
 }
 
-pub fn agent_summaries(report: &EvaluationReport) -> Vec<AgentSummary> {
+pub fn agent_summaries(
+    report: &EvaluationReport,
+    answer_files: &[AnswerFile],
+) -> Vec<AgentSummary> {
     let total = report.rows.len();
     report
         .agents
         .iter()
         .map(|agent_key| {
-            let mut correct = 0;
             let mut valid = 0;
             let mut optimal_length = 0;
             let mut answered = 0;
@@ -307,21 +335,32 @@ pub fn agent_summaries(report: &EvaluationReport) -> Vec<AgentSummary> {
                 answered += 1;
                 if result.valid {
                     valid += 1;
-                }
-                if result.length == Some(row.expected_length) {
-                    optimal_length += 1;
-                }
-                if result.correct {
-                    correct += 1;
+                    if result.length == Some(row.expected_length) {
+                        optimal_length += 1;
+                    }
                 }
             }
+            let file = answer_files
+                .iter()
+                .find(|file| file.agent_key == *agent_key);
+            let attempts = file.and_then(|file| file.attempts);
+            let mistakes = file
+                .map(|file| {
+                    file.answers
+                        .iter()
+                        .filter_map(|answer| answer.mistakes)
+                        .map(|count| count as usize)
+                        .sum()
+                })
+                .unwrap_or(0);
             AgentSummary {
                 agent_key: agent_key.clone(),
-                correct,
                 valid,
                 optimal_length,
                 answered,
                 total,
+                attempts,
+                mistakes,
             }
         })
         .collect()
@@ -358,11 +397,37 @@ pub fn load_report(path: &Path) -> anyhow::Result<EvaluationReport> {
     Ok(EvaluationReport { agents, rows })
 }
 
+/// Infer the data directory from a questions file path.
+pub fn data_dir_for_questions(questions: &Path) -> anyhow::Result<PathBuf> {
+    questions
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not infer data directory from `{}`",
+                questions.display()
+            )
+        })
+}
+
+/// Use explicit answer paths, or discover `answers.*.jsonl` next to the questions file.
+pub fn resolve_answer_paths(
+    questions: &Path,
+    explicit: &[PathBuf],
+) -> anyhow::Result<Vec<PathBuf>> {
+    if !explicit.is_empty() {
+        return Ok(explicit.to_vec());
+    }
+    let dir = data_dir_for_questions(questions)?;
+    discover_answer_files(&dir)
+}
+
 /// Discover solver answer files named `answers.<problem>.<agent>.<llm>.jsonl` in a directory.
 pub fn discover_answer_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    for entry in fs::read_dir(dir)
-        .with_context(|| format!("could not read directory {}", dir.display()))?
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("could not read directory {}", dir.display()))?
     {
         let entry = entry.with_context(|| format!("could not read entry in {}", dir.display()))?;
         let path = entry.path();
@@ -443,7 +508,6 @@ fn score_graph(space: &Space, question: &Question, predicted: &Value) -> AgentRe
 
 fn graded(grade: PathGrade) -> AgentResult {
     AgentResult {
-        correct: grade.correct,
         valid: grade.valid,
         length: grade.length,
         error: None,
@@ -452,7 +516,6 @@ fn graded(grade: PathGrade) -> AgentResult {
 
 fn failed(error: String) -> AgentResult {
     AgentResult {
-        correct: false,
         valid: false,
         length: None,
         error: Some(error),
@@ -482,12 +545,18 @@ mod tests {
         (space, questions)
     }
 
-    fn answer_file(problem: Problem, agent: &str, llm: &str, rows: Vec<SolverAnswerRow>) -> AnswerFile {
+    fn answer_file(
+        problem: Problem,
+        agent: &str,
+        llm: &str,
+        rows: Vec<SolverAnswerRow>,
+    ) -> AnswerFile {
         AnswerFile {
             path: PathBuf::from(format!("answers.{problem}.{agent}.{llm}.jsonl")),
             agent_key: agent_key(problem, agent, llm),
             problem,
             answers: rows,
+            attempts: None,
         }
     }
 
@@ -503,6 +572,7 @@ mod tests {
                 id: questions[0].id,
                 prediction: Some(json!(graph.path)),
                 error: None,
+                mistakes: None,
             }],
         );
         let report = evaluate_files(&space, &questions, &[file]).expect("evaluation");
@@ -510,14 +580,13 @@ mod tests {
             .agents
             .get("graph/bare/test-llm")
             .expect("agent");
-        assert!(result.correct);
         assert!(result.valid);
         assert_eq!(result.length, Some(report.rows[0].expected_length));
         assert_eq!(result.error, None);
     }
 
     #[test]
-    fn a_solver_error_is_not_a_correct_path() {
+    fn a_solver_error_is_not_a_valid_path() {
         let (space, questions) = questions(1);
         let file = answer_file(
             Problem::Graph,
@@ -527,6 +596,7 @@ mod tests {
                 id: questions[0].id,
                 prediction: None,
                 error: Some("model timed out".to_string()),
+                mistakes: None,
             }],
         );
         let report = evaluate_files(&space, &questions, &[file]).expect("evaluation");
@@ -534,7 +604,7 @@ mod tests {
             .agents
             .get("graph/bare/test-llm")
             .expect("agent");
-        assert!(!result.correct);
+        assert!(!result.valid);
         assert_eq!(result.error.as_deref(), Some("model timed out"));
     }
 
@@ -546,6 +616,7 @@ mod tests {
             id: questions[0].id,
             prediction: Some(json!(graph.path)),
             error: None,
+            mistakes: None,
         };
         let file = answer_file(Problem::Graph, "bare", "test-llm", vec![row.clone(), row]);
         let error = evaluate_files(&space, &questions, &[file]).unwrap_err();
@@ -569,11 +640,13 @@ mod tests {
                     id: 0,
                     prediction: Some(json!(graph0)),
                     error: None,
+                    mistakes: None,
                 },
                 SolverAnswerRow {
                     id: 1,
                     prediction: Some(json!(graph1)),
                     error: None,
+                    mistakes: None,
                 },
             ],
         );
@@ -585,17 +658,108 @@ mod tests {
                 id: 0,
                 prediction: Some(json!(graph0)),
                 error: None,
+                mistakes: None,
             }],
         );
         let report = evaluate_files(&space, &questions, &[file_a, file_b]).expect("evaluation");
         assert_eq!(report.agents.len(), 2);
         assert_eq!(report.rows.len(), 2);
-        assert!(report.rows[0].agents["graph/bare/llm-a"].correct);
-        assert!(report.rows[0].agents["graph/bare/llm-b"].correct);
+        assert!(report.rows[0].agents["graph/bare/llm-a"].valid);
+        assert!(report.rows[0].agents["graph/bare/llm-b"].valid);
         assert_eq!(
             report.rows[1].agents["graph/bare/llm-b"].error.as_deref(),
             Some("not answered")
         );
+    }
+
+    #[test]
+    fn optimal_length_only_counts_valid_paths() {
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            "graph/bare/test-llm".to_string(),
+            AgentResult {
+                valid: false,
+                length: Some(3),
+                error: None,
+            },
+        );
+        let report = EvaluationReport {
+            agents: vec!["graph/bare/test-llm".to_string()],
+            rows: vec![QuestionReport {
+                id: 0,
+                expected_length: 3,
+                agents,
+            }],
+        };
+        let file = answer_file(Problem::Graph, "bare", "test-llm", vec![]);
+        let summaries = agent_summaries(&report, &[file]);
+        assert_eq!(summaries[0].valid, 0);
+        assert_eq!(summaries[0].optimal_length, 0);
+    }
+
+    #[test]
+    fn agent_summaries_aggregate_attempts_and_mistakes() {
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            "graph/validating/test-llm".to_string(),
+            AgentResult {
+                valid: true,
+                length: Some(2),
+                error: None,
+            },
+        );
+        let report = EvaluationReport {
+            agents: vec!["graph/validating/test-llm".to_string()],
+            rows: vec![QuestionReport {
+                id: 0,
+                expected_length: 2,
+                agents,
+            }],
+        };
+        let file = AnswerFile {
+            path: PathBuf::from("answers.graph.validating.test-llm.jsonl"),
+            agent_key: "graph/validating/test-llm".to_string(),
+            problem: Problem::Graph,
+            answers: vec![
+                SolverAnswerRow {
+                    id: 0,
+                    prediction: Some(json!(["A", "B", "C"])),
+                    error: None,
+                    mistakes: Some(2),
+                },
+                SolverAnswerRow {
+                    id: 1,
+                    prediction: Some(json!(["A", "C"])),
+                    error: None,
+                    mistakes: Some(1),
+                },
+            ],
+            attempts: Some(3),
+        };
+        let summaries = agent_summaries(&report, &[file]);
+        assert_eq!(summaries[0].attempts, Some(3));
+        assert_eq!(summaries[0].mistakes, 3);
+    }
+
+    #[test]
+    fn resolve_answer_paths_uses_explicit_files() {
+        let explicit = vec![PathBuf::from("answers.graph.bare.llm-a.jsonl")];
+        let resolved =
+            resolve_answer_paths(Path::new("data/questions.jsonl"), &explicit).expect("resolve");
+        assert_eq!(resolved, explicit);
+    }
+
+    #[test]
+    fn resolve_answer_paths_discovers_from_questions_directory() {
+        let dir = std::env::temp_dir().join(format!("evaluation-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("answers.graph.bare.llm-a.jsonl"), "{}\n").expect("write");
+        std::fs::write(dir.join("answers.coordinates.bare.llm-b.jsonl"), "{}\n").expect("write");
+        let questions = dir.join("questions.jsonl");
+        std::fs::write(&questions, "{}\n").expect("write");
+        let resolved = resolve_answer_paths(&questions, &[]).expect("resolve");
+        assert_eq!(resolved.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -607,7 +771,14 @@ mod tests {
         std::fs::write(dir.join("questions.jsonl"), "{}\n").expect("write");
         let paths = discover_answer_files(&dir).expect("discover");
         assert_eq!(paths.len(), 2);
-        assert!(paths[0].file_name().unwrap().to_str().unwrap().starts_with("answers."));
+        assert!(
+            paths[0]
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("answers.")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -623,6 +794,7 @@ mod tests {
                 id: questions[0].id,
                 prediction: Some(json!(graph.path)),
                 error: None,
+                mistakes: None,
             }],
         );
         let report = evaluate_files(&space, &questions, &[file]).expect("evaluation");

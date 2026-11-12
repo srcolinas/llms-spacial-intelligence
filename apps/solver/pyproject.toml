@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Solve spatial shortest-path questions with LLM agents"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=1.17.0,<2",
+    "langfuse>=5.0.4",
     "pydantic>=2",
     "pydantic-ai>=2.50",
     "pydantic-settings>=2.15",

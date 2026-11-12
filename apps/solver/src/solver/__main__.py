@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pydantic
+
+if TYPE_CHECKING:
+    from langfuse import Langfuse
 
 from solver.agents import AGENT_NAMES
 from solver.dataset import ProblemKind
@@ -53,9 +57,9 @@ def main() -> None:
     if output is None:
         output = default_output_path(problem, args.agent, args.llm)
 
-    _langfuse()
+    langfuse = _langfuse()
     try:
-        written, failed = asyncio.run(
+        written, failed, attempts = asyncio.run(
             run(
                 llm=args.llm,
                 agent_name=args.agent,
@@ -68,7 +72,9 @@ def main() -> None:
         )
     except (FileNotFoundError, ValueError, pydantic.ValidationError) as exc:
         raise SystemExit(str(exc)) from exc
-    print(f"Wrote {written} {problem} answers to {output}")
+    finally:
+        langfuse.flush()
+    print(f"Attempt {attempts} — wrote {written} {problem} answers to {output}")
     if failed:
         print(f"{failed} questions could not be answered")
 
@@ -86,13 +92,15 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _langfuse():
-    import langfuse
+def _langfuse() -> Langfuse:
     import pydantic_ai
+
+    import langfuse
 
     observer = langfuse.Langfuse()
     pydantic_ai.Agent.instrument_all()
     return observer
+
 
 if __name__ == "__main__":
     main()
